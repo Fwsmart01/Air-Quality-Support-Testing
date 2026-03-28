@@ -1,0 +1,485 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Delhi AQ Monitor — XRPL Verified</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:sans-serif;background:#0f1117;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{padding:12px 20px;border-bottom:0.5px solid #2a2d3a;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+header h1{font-size:15px;font-weight:500;color:#fff}
+header span{font-size:12px;color:#888}
+.live-dot{display:inline-block;width:8px;height:8px;background:#4caf50;border-radius:50%;margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.body{display:flex;flex:1;overflow:hidden}
+.sidebar{width:230px;border-right:0.5px solid #2a2d3a;padding:14px;overflow-y:auto;flex-shrink:0;font-size:13px}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.map-wrap{flex:1;position:relative}
+#lmap{width:100%;height:100%}
+.history-panel{height:200px;border-top:0.5px solid #2a2d3a;padding:12px;display:flex;flex-direction:column;gap:8px;flex-shrink:0}
+.tabs{display:flex;gap:6px;flex-shrink:0}
+.tab{font-size:11px;padding:4px 10px;border-radius:4px;border:0.5px solid #2a2d3a;background:transparent;color:#888;cursor:pointer}
+.tab.active{background:#1a1d27;color:#fff;border-color:#4a7cf0}
+#history-chart{flex:1}
+.panel-title{font-size:10px;font-weight:500;color:#666;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.wind-box{background:#1a1d27;border:0.5px solid #2a2d3a;border-radius:8px;padding:10px;margin-bottom:12px}
+.wind-row{display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:3px}
+.wind-val{color:#ddd;font-weight:500}
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px}
+.metric{background:#1a1d27;border:0.5px solid #2a2d3a;border-radius:8px;padding:8px}
+.metric .lbl{font-size:10px;color:#888;margin-bottom:3px}
+.metric .v{font-size:18px;font-weight:500}
+.metric .u{font-size:10px;color:#888;margin-left:2px}
+.sensor-item{background:#1a1d27;border:0.5px solid #2a2d3a;border-radius:8px;padding:9px;margin-bottom:5px;cursor:pointer;transition:border-color .15s}
+.sensor-item:hover,.sensor-item.active{border-color:#4a7cf0}
+.s-name{font-size:12px;font-weight:500;color:#ddd;margin-bottom:3px}
+.s-meta{font-size:10px;color:#888;display:flex;justify-content:space-between;align-items:center}
+.aqi-badge{font-size:10px;font-weight:500;padding:2px 6px;border-radius:4px}
+.good{background:#1b3a2a;color:#4caf50}.mod{background:#3a3210;color:#ffb300}
+.usg{background:#3a2510;color:#ff7043}.unhl{background:#3a1010;color:#ef5350}
+.haz{background:#2a0a1a;color:#e91e63}
+.source-box{background:#1a1d27;border:0.5px solid #e91e63;border-radius:8px;padding:10px;margin-bottom:12px}
+.src-lbl{font-size:10px;color:#e91e63;margin-bottom:3px}
+.src-name{font-size:13px;font-weight:500;color:#fff;margin-bottom:3px}
+.src-desc{font-size:10px;color:#888;margin-top:3px}
+.history-status{font-size:11px;color:#888;flex-shrink:0}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="live-dot"></span>Delhi Air Quality Monitor — XRPL Verified</h1>
+  <span id="ts">—</span>
+</header>
+<div class="body">
+  <div class="sidebar">
+    <div class="panel-title">Wind</div>
+    <div class="wind-box">
+      <div class="wind-row"><span>Direction</span><span class="wind-val" id="wd-dir">—</span></div>
+      <div class="wind-row"><span>Speed</span><span class="wind-val" id="wd-spd">—</span></div>
+      <div class="wind-row"><span>Gusts</span><span class="wind-val" id="wd-gst">—</span></div>
+      <div class="wind-row" style="margin-top:4px"><span style="font-size:9px;color:#555" id="wind-src">—</span></div>
+    </div>
+    <div class="panel-title">City overview</div>
+    <div class="metrics">
+      <div class="metric"><div class="lbl">Avg AQI</div><div class="v" id="avg-aqi" style="color:#888">—</div></div>
+      <div class="metric"><div class="lbl">Sensors</div><div class="v" style="color:#4caf50">8<span class="u">live</span></div></div>
+      <div class="metric"><div class="lbl">PM2.5</div><div class="v" id="avg-pm" style="color:#888">—<span class="u">µg</span></div></div>
+      <div class="metric"><div class="lbl">NO₂</div><div class="v" id="avg-no2" style="color:#888">—<span class="u">µg</span></div></div>
+    </div>
+    <div class="panel-title">Likely source</div>
+    <div style="font-size:9px;color:#555;margin-bottom:6px" id="aq-src">Fetching OpenAQ…</div>
+    <div class="source-box">
+      <div class="src-lbl">Wind-traced source inference</div>
+      <div style="font-size:10px;margin-bottom:4px"><span id="src-type" style="font-weight:500;color:#888">—</span></div>
+      <div class="src-name" id="src-name">Awaiting live data…</div>
+      <div class="src-desc" id="src-desc">Source inferred once AQI and wind data load.</div>
+    </div>
+    <div class="panel-title">Sensors</div>
+    <div id="sensor-list"></div>
+  </div>
+  <div class="main">
+    <div class="map-wrap"><div id="lmap"></div></div>
+    <div class="history-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div class="panel-title" style="margin:0">Historical data</div>
+        <div class="tabs">
+          <button class="tab active" onclick="setTab('aqi',this)">AQI</button>
+          <button class="tab" onclick="setTab('pm',this)">PM2.5</button>
+          <button class="tab" onclick="setTab('no2',this)">NO₂</button>
+        </div>
+        <div class="history-status" id="hist-status">—</div>
+      </div>
+      <canvas id="history-chart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+// ── DATA ─────────────────────────────────────────────────────
+const SENSORS = [
+  {id:1, name:"Anand Vihar",  lat:28.6469, lng:77.3152, aqi:null, pm:null, no2:null, cat:null},
+  {id:2, name:"Punjabi Bagh", lat:28.6693, lng:77.1312, aqi:null, pm:null, no2:null, cat:null},
+  {id:3, name:"R.K. Puram",   lat:28.5651, lng:77.1758, aqi:null, pm:null, no2:null, cat:null},
+  {id:4, name:"Wazirpur",     lat:28.6908, lng:77.1648, aqi:null, pm:null, no2:null, cat:null},
+  {id:5, name:"Dwarka Sec 8", lat:28.5672, lng:77.0580, aqi:null, pm:null, no2:null, cat:null},
+  {id:6, name:"Vivek Vihar",  lat:28.6700, lng:77.3100, aqi:null, pm:null, no2:null, cat:null},
+  {id:7, name:"ITO",          lat:28.6289, lng:77.2405, aqi:null, pm:null, no2:null, cat:null},
+  {id:8, name:"Rohini",       lat:28.7338, lng:77.1167, aqi:null, pm:null, no2:null, cat:null},
+];
+
+const POLLUTION_SOURCES = [
+  {name:"Bawana Industrial Estate", lat:28.778, lng:77.037, type:"industrial", desc:"Largest industrial estate in Asia (DSIDC). Major PM2.5 emitter."},
+  {name:"Narela Industrial Area",   lat:28.855, lng:77.093, type:"industrial", desc:"DSIDC industrial cluster, northwest Delhi."},
+  {name:"Wazirpur Industrial Area", lat:28.697, lng:77.165, type:"industrial", desc:"Dense small-scale industry cluster, known pollution hotspot."},
+  {name:"Okhla Industrial Area",    lat:28.535, lng:77.272, type:"industrial", desc:"South Delhi industrial zone. Significant NO₂ and PM emissions."},
+  {name:"Ghazipur Landfill",        lat:28.627, lng:77.325, type:"landfill",   desc:"One of three overflowing Delhi landfills. Frequent waste fires."},
+  {name:"Bhalswa Landfill",         lat:28.743, lng:77.163, type:"landfill",   desc:"North Delhi landfill. Routine open burning of waste."},
+  {name:"Bawana Gas Power Plant",   lat:28.760, lng:77.032, type:"powerplant", desc:"Active 1500MW gas plant, replaced coal Badarpur plant (closed 2018)."},
+  {name:"Panipat (Haryana)",        lat:29.391, lng:76.963, type:"regional",   desc:"Upwind Haryana industrial/refinery complex, major regional emitter."},
+];
+const SRC_COLORS = {industrial:"#ff7043", landfill:"#ffb300", powerplant:"#ef5350", regional:"#e91e63"};
+const SRC_ICONS  = {industrial:"⚙", landfill:"♻", powerplant:"⚡", regional:"↗"};
+
+// ── STATE ────────────────────────────────────────────────────
+let windDeg = null;
+let currentTab = 'aqi';
+let chart = null;
+let historyData = [];
+let markerRefs = [];
+let windLayers = [];
+let plumeLayers = [];
+
+// ── HELPERS ──────────────────────────────────────────────────
+function aqiColor(v) {
+  if (v == null) return '#555';
+  if (v <= 50)  return '#4caf50';
+  if (v <= 100) return '#ffb300';
+  if (v <= 150) return '#ff7043';
+  if (v <= 200) return '#ef5350';
+  return '#e91e63';
+}
+function aqiCat(v) {
+  if (v <= 50)  return 'good';
+  if (v <= 100) return 'mod';
+  if (v <= 150) return 'usg';
+  if (v <= 200) return 'unhl';
+  return 'haz';
+}
+function pmToAqi(pm) {
+  const b = [[0,12,0,50],[12.1,35.4,51,100],[35.5,55.4,101,150],[55.5,150.4,151,200],[150.5,250.4,201,300],[250.5,500.4,301,500]];
+  for (const [cLo,cHi,iLo,iHi] of b) {
+    if (pm <= cHi) return Math.round(((iHi-iLo)/(cHi-cLo))*(pm-cLo)+iLo);
+  }
+  return 500;
+}
+function degToCompass(d) {
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(d/22.5) % 16];
+}
+function tick() { document.getElementById('ts').textContent = 'Updated ' + new Date().toLocaleTimeString(); }
+
+// ── MAP ──────────────────────────────────────────────────────
+const map = L.map('lmap', {zoomControl:true}).setView([28.63, 77.22], 11);
+window._leafMap = map;
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution:'© <a href="https://openstreetmap.org">OSM</a> © <a href="https://carto.com">CARTO</a>',
+  subdomains:'abcd', maxZoom:19
+}).addTo(map);
+
+// Documented source markers
+POLLUTION_SOURCES.forEach(src => {
+  const col = SRC_COLORS[src.type];
+  const icon = L.divIcon({
+    html:`<div title="${src.name}" style="width:26px;height:26px;border-radius:4px;border:1.5px solid ${col};background:${col}22;display:flex;align-items:center;justify-content:center;font-size:13px;cursor:pointer">${SRC_ICONS[src.type]}</div>`,
+    className:'', iconAnchor:[13,13]
+  });
+  L.marker([src.lat,src.lng],{icon}).addTo(map)
+    .bindTooltip(`<b>${src.name}</b><br><span style="color:${col};font-size:10px">${src.type.toUpperCase()}</span><br>${src.desc}`,{direction:'top',offset:[0,-14]});
+});
+
+// ── WIND ─────────────────────────────────────────────────────
+async function fetchWind() {
+  try {
+    const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=28.63&longitude=77.22&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kmh');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const c = data.current;
+    windDeg = c.wind_direction_10m;
+    const from = degToCompass(windDeg);
+    const to   = degToCompass((windDeg + 180) % 360);
+    document.getElementById('wd-dir').textContent = `${from} → ${to}`;
+    document.getElementById('wd-spd').textContent = Math.round(c.wind_speed_10m) + ' km/h';
+    document.getElementById('wd-gst').textContent = Math.round(c.wind_gusts_10m) + ' km/h';
+    document.getElementById('wind-src').textContent = 'Open-Meteo · ' + new Date().toLocaleTimeString();
+    drawWindArrows();
+  } catch(e) {
+    console.error('Wind fetch failed:', e);
+    document.getElementById('wind-src').textContent = 'Wind API unavailable';
+  }
+}
+
+function drawWindArrows() {
+  windLayers.forEach(l => map.removeLayer(l));
+  windLayers = [];
+  if (windDeg == null) return;
+  const rad = windDeg * Math.PI / 180;
+  const d = 0.09, hd = 0.018;
+  for (let lat = 28.52; lat <= 28.88; lat += 0.12) {
+    for (let lng = 77.00; lng <= 77.38; lng += 0.13) {
+      const eLat = lat + d * Math.cos(rad);
+      const eLng = lng + d * Math.sin(rad);
+      windLayers.push(
+        L.polyline([[lat,lng],[eLat,eLng]],{color:'#2a5a9a',weight:1.5,dashArray:'5 4',opacity:0.6}).addTo(map),
+        L.polyline([
+          [eLat-hd*Math.cos(rad+0.5), eLng-hd*Math.sin(rad+0.5)],
+          [eLat,eLng],
+          [eLat-hd*Math.cos(rad-0.5), eLng-hd*Math.sin(rad-0.5)]
+        ],{color:'#2a5a9a',weight:1.5,opacity:0.6}).addTo(map)
+      );
+    }
+  }
+}
+
+// ── AIR QUALITY ──────────────────────────────────────────────
+async function fetchAQ() {
+  document.getElementById('aq-src').textContent = 'Fetching OpenAQ…';
+  try {
+    const res = await fetch('https://api.openaq.org/v3/locations?country_id=IN&limit=100&order_by=lastUpdated&sort=desc&bbox=76.8,28.4,77.4,28.9', {
+      headers:{'Accept':'application/json', 'X-API-Key': ''}
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data.results?.length) throw new Error('No results');
+
+    let matched = 0;
+    data.results.forEach(station => {
+      if (!station.coordinates) return;
+      // Find closest sensor within 8km
+      let best = null, bestDist = 0.08;
+      SENSORS.forEach(s => {
+        const dist = Math.hypot(s.lat - station.coordinates.latitude, s.lng - station.coordinates.longitude);
+        if (dist < bestDist) { bestDist = dist; best = s; }
+      });
+      if (!best) return;
+
+      station.sensors?.forEach(sens => {
+        const p = sens.parameter?.name?.toLowerCase();
+        const v = sens.latest?.value;
+        if (v == null || v < 0) return;
+        if (p === 'pm25') {
+          best.pm  = Math.round(v);
+          best.aqi = pmToAqi(v);
+          best.cat = aqiCat(best.aqi);
+          matched++;
+        }
+        if (p === 'no2') best.no2 = Math.round(v);
+      });
+    });
+
+    buildSidebar();
+    updateMarkers();
+    runTriangulation();
+    document.getElementById('aq-src').textContent = `OpenAQ · ${matched} sensors matched · ${new Date().toLocaleTimeString()}`;
+    saveReading();
+  } catch(e) {
+    console.error('AQ fetch failed:', e);
+    document.getElementById('aq-src').textContent = 'OpenAQ unavailable — retrying in 10 min';
+  }
+}
+
+// ── SIDEBAR ──────────────────────────────────────────────────
+function buildSidebar() {
+  let tAqi=0, tPm=0, tNo2=0, n=0;
+  const list = document.getElementById('sensor-list');
+  list.innerHTML = '';
+  SENSORS.forEach(s => {
+    if (s.aqi != null) { tAqi+=s.aqi; tPm+=(s.pm||0); tNo2+=(s.no2||0); n++; }
+    const badge = s.aqi != null
+      ? `<span class="aqi-badge ${s.cat}">AQI ${s.aqi}</span>`
+      : `<span style="font-size:10px;color:#444">fetching…</span>`;
+    const d = document.createElement('div');
+    d.className = 'sensor-item'; d.dataset.id = s.id;
+    d.innerHTML = `<div class="s-name">${s.name}</div><div class="s-meta"><span>PM2.5: ${s.pm != null ? s.pm+' µg/m³' : '—'}</span>${badge}</div>`;
+    list.appendChild(d);
+  });
+  if (n > 0) {
+    const avg = Math.round(tAqi/n);
+    document.getElementById('avg-aqi').textContent = avg;
+    document.getElementById('avg-aqi').style.color = aqiColor(avg);
+    document.getElementById('avg-pm').textContent = Math.round(tPm/n);
+    document.getElementById('avg-no2').textContent = Math.round(tNo2/n);
+  }
+}
+
+// ── MARKERS ──────────────────────────────────────────────────
+function updateMarkers() {
+  markerRefs.forEach(m => map.removeLayer(m));
+  markerRefs = [];
+  SENSORS.forEach(s => {
+    const col   = aqiColor(s.aqi);
+    const label = s.aqi != null ? s.aqi : '…';
+    const icon  = L.divIcon({
+      html:`<div style="width:36px;height:36px;border-radius:50%;border:2px solid ${col};background:${col}22;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:${col};font-family:sans-serif;cursor:pointer">${label}</div>`,
+      className:'', iconAnchor:[18,18]
+    });
+    const m = L.marker([s.lat,s.lng],{icon}).addTo(map);
+    m.bindTooltip(
+      `<b>${s.name}</b><br>AQI: ${s.aqi ?? '—'}<br>PM2.5: ${s.pm != null ? s.pm+' µg/m³' : '—'}<br>NO₂: ${s.no2 != null ? s.no2+' µg/m³' : '—'}<br><span style="color:#4caf50;font-size:10px">✓ OpenAQ + XRPL</span>`,
+      {direction:'top', offset:[0,-18]}
+    );
+    markerRefs.push(m);
+  });
+}
+
+// ── BACK-TRAJECTORY SOURCE TRIANGULATION ─────────────────────
+// For each sensor with live AQI, cast a ray upwind weighted by AQI.
+// Build a lat/lng heatmap grid, accumulate AQI weight along each ray,
+// find the peak cell = most likely source origin.
+
+const GRID_RES  = 0.04;  // ~4km grid cells
+const RAY_STEPS = 18;    // how far upwind to trace (18 × 4km ≈ 72km)
+const AQI_THRESHOLD = 80; // only include sensors above this
+
+let triangLayer = null;  // single Leaflet layer group for all triangulation visuals
+
+function runTriangulation() {
+  // Clear previous
+  if (triangLayer) { triangLayer.clearLayers(); }
+  else { triangLayer = L.layerGroup().addTo(map); }
+
+  const live = SENSORS.filter(s => s.aqi != null && s.aqi >= AQI_THRESHOLD);
+  if (live.length < 2 || windDeg == null) return;
+
+  const rad = windDeg * Math.PI / 180;
+
+  // Accumulate weights on a sparse grid
+  const grid = {};
+  const key  = (r, c) => `${r},${c}`;
+
+  live.forEach(s => {
+    const weight = s.aqi; // higher AQI = stronger signal
+    for (let step = 1; step <= RAY_STEPS; step++) {
+      // Walk upwind: subtract wind vector
+      const dist = step * GRID_RES;
+      const rLat = s.lat - dist * Math.cos(rad);
+      const rLng = s.lng - dist * Math.sin(rad);
+      // Snap to grid
+      const gRow = Math.round(rLat / GRID_RES);
+      const gCol = Math.round(rLng / GRID_RES);
+      const k = key(gRow, gCol);
+      // Weight decays with distance so nearby convergence scores higher
+      const decay = 1 - (step / (RAY_STEPS + 1));
+      grid[k] = (grid[k] || {lat: gRow*GRID_RES, lng: gCol*GRID_RES, score:0, hits:0});
+      grid[k].score += weight * decay;
+      grid[k].hits  += 1;
+    }
+  });
+
+  // Only keep cells hit by rays from ≥2 different sensors
+  const cells = Object.values(grid).filter(c => c.hits >= 2);
+  if (!cells.length) return;
+
+  const maxScore = Math.max(...cells.map(c => c.score));
+
+  // Draw heatmap rectangles for high-scoring cells
+  const TOP_THRESH = 0.35; // show top 35% of score range
+  cells.forEach(c => {
+    const norm = c.score / maxScore;
+    if (norm < TOP_THRESH) return;
+    const alpha = (norm - TOP_THRESH) / (1 - TOP_THRESH); // 0–1 within shown range
+    const r = Math.round(255 * Math.min(1, alpha * 2));
+    const g = Math.round(80  * (1 - alpha));
+    const color = `rgb(${r},${g},20)`;
+    L.rectangle(
+      [[c.lat - GRID_RES/2, c.lng - GRID_RES/2],[c.lat + GRID_RES/2, c.lng + GRID_RES/2]],
+      {color:'transparent', fillColor:color, fillOpacity: 0.12 + alpha * 0.30, weight:0}
+    ).addTo(triangLayer);
+  });
+
+  // Draw individual upwind rays (thin, low opacity)
+  live.forEach(s => {
+    const endLat = s.lat - RAY_STEPS * GRID_RES * Math.cos(rad);
+    const endLng = s.lng - RAY_STEPS * GRID_RES * Math.sin(rad);
+    L.polyline([[s.lat, s.lng],[endLat, endLng]], {
+      color:'#ff7043', weight:1, opacity:0.25, dashArray:'3 5'
+    }).addTo(triangLayer);
+  });
+
+  // Find peak cell = computed source
+  const peak = cells.reduce((a,b) => a.score > b.score ? a : b);
+
+  // Pulse marker at computed source
+  const pulseIcon = L.divIcon({
+    html:`<div style="position:relative;width:40px;height:40px">
+      <div style="position:absolute;inset:0;border-radius:50%;border:2px solid #ff3d00;animation:tpulse 1.5s infinite;opacity:0.6"></div>
+      <div style="position:absolute;inset:8px;border-radius:50%;background:#ff3d00;opacity:0.85;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:700">SRC</div>
+    </div>
+    <style>@keyframes tpulse{0%,100%{transform:scale(1);opacity:0.6}50%{transform:scale(1.5);opacity:0.2}}</style>`,
+    className:'', iconAnchor:[20,20]
+  });
+  L.marker([peak.lat, peak.lng], {icon: pulseIcon}).addTo(triangLayer)
+   .bindTooltip(
+    `<b>Computed source origin</b><br>
+     Convergence score: ${Math.round(peak.score)}<br>
+     Rays from ${live.length} sensors<br>
+     Wind bearing: ${Math.round(windDeg)}°<br>
+     <span style="color:#ff7043;font-size:10px">Back-trajectory triangulation</span>`,
+    {direction:'top', offset:[0,-20], permanent:false}
+  );
+
+  // Match to nearest documented source and update sidebar
+  let nearest = null, minD = Infinity;
+  POLLUTION_SOURCES.forEach(src => {
+    const d = Math.hypot(src.lat - peak.lat, src.lng - peak.lng);
+    if (d < minD) { minD = d; nearest = src; }
+  });
+  if (nearest) {
+    const col = SRC_COLORS[nearest.type];
+    const kmAway = Math.round(minD * 111);
+    document.getElementById('src-type').textContent = nearest.type.toUpperCase();
+    document.getElementById('src-type').style.color = col;
+    document.getElementById('src-name').textContent = nearest.name;
+    document.getElementById('src-name').style.color = col;
+    document.getElementById('src-desc').textContent =
+      `Triangulated from ${live.length} sensors · wind ${Math.round(windDeg)}°. ` +
+      `Nearest known source ${kmAway}km from computed origin. ${nearest.desc}`;
+  }
+}
+
+// ── HISTORY (localStorage) ───────────────────────────────────
+function loadHistory() {
+  try { historyData = JSON.parse(localStorage.getItem('delhi-aq-history') || '[]'); }
+  catch(e) { historyData = []; }
+}
+function saveReading() {
+  const live = SENSORS.filter(s => s.aqi != null);
+  if (!live.length) return;
+  const avg = f => Math.round(live.reduce((a,s)=>a+(s[f]||0),0)/live.length);
+  historyData.push({t: new Date().toISOString(), aqi: avg('aqi'), pm: avg('pm'), no2: avg('no2')});
+  if (historyData.length > 48) historyData = historyData.slice(-48);
+  try { localStorage.setItem('delhi-aq-history', JSON.stringify(historyData)); } catch(e){}
+  document.getElementById('hist-status').textContent = historyData.length + ' readings stored';
+  renderChart();
+}
+function renderChart() {
+  if (!historyData.length) { document.getElementById('hist-status').textContent = 'No readings yet'; return; }
+  const labels = historyData.map(d => { const dt=new Date(d.t); return dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0'); });
+  const vals   = historyData.map(d => d[currentTab]);
+  const col    = currentTab==='aqi'?'#ff7043':currentTab==='pm'?'#ffb300':'#4a7cf0';
+  if (chart) { chart.destroy(); chart = null; }
+  chart = new Chart(document.getElementById('history-chart'), {
+    type:'line',
+    data:{labels, datasets:[{data:vals, label:currentTab, borderColor:col, backgroundColor:col+'22', borderWidth:1.5, pointRadius:2, fill:true, tension:0.3}]},
+    options:{responsive:true, maintainAspectRatio:false, animation:false,
+      plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#666',font:{size:9},maxTicksLimit:12},grid:{color:'#1a1d27'}},
+              y:{ticks:{color:'#666',font:{size:9}},grid:{color:'#1e2130'}}}}
+  });
+}
+function setTab(tab, el) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  renderChart();
+}
+
+// ── INIT ─────────────────────────────────────────────────────
+tick();
+setInterval(tick, 30000);
+loadHistory();
+renderChart();
+buildSidebar();
+updateMarkers();
+
+// Fetch wind first, then AQ — triangulation needs both
+fetchWind().then(() => fetchAQ());
+setInterval(() => fetchWind().then(() => { drawWindArrows(); runTriangulation(); }), 10 * 60 * 1000);
+setInterval(fetchAQ, 10 * 60 * 1000);
+</script>
+</body>
+</html>
