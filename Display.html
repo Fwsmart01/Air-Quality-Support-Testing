@@ -444,31 +444,39 @@ async function fetchHistoricalData(startDate, endDate) {
   document.getElementById('hist-status').textContent = 'Loading historical data…';
   document.getElementById('hist-load-btn').disabled = true;
   try {
-    // Use centre of Delhi — single point for city-wide average
-    const url = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=28.63&longitude=77.22&hourly=pm2_5,nitrogen_dioxide,us_aqi&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`;
-    const res  = await fetch(url);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    const times = data.hourly.time;
-    const aqis  = data.hourly.us_aqi;
-    const pms   = data.hourly.pm2_5;
-    const no2s  = data.hourly.nitrogen_dioxide;
+    // Fetch per-sensor historical data for accurate per-location readings
+    const results = await Promise.all(SENSORS.map(s =>
+      fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${s.lat}&longitude=${s.lng}&hourly=pm2_5,nitrogen_dioxide,us_aqi&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`)
+        .then(r => r.json())
+    ));
 
-    // Build entries — skip nulls, sample every 3 hours to keep size manageable
+    // Build per-timestamp city average entries (every 3 hours)
+    const times = results[0].hourly.time;
     const imported = [];
     times.forEach((t, i) => {
       if (i % 3 !== 0) return;
-      if (aqis[i] == null) return;
+      const aqis = results.map(r => r.hourly.us_aqi?.[i]).filter(v => v != null);
+      const pms  = results.map(r => r.hourly.pm2_5?.[i]).filter(v => v != null);
+      const no2s = results.map(r => r.hourly.nitrogen_dioxide?.[i]).filter(v => v != null);
+      if (!aqis.length) return;
+      const avg = arr => Math.round(arr.reduce((a,b)=>a+b,0)/arr.length);
+
+      // Store per-sensor snapshot for map playback
+      const sensorSnap = results.map((r, si) => ({
+        id: SENSORS[si].id,
+        aqi: r.hourly.us_aqi?.[i] != null ? Math.round(r.hourly.us_aqi[i]) : null,
+        pm:  r.hourly.pm2_5?.[i]  != null ? Math.round(r.hourly.pm2_5[i])  : null,
+        no2: r.hourly.nitrogen_dioxide?.[i] != null ? Math.round(r.hourly.nitrogen_dioxide[i]) : null,
+      }));
+
       imported.push({
         t: new Date(t).toISOString(),
-        aqi: Math.round(aqis[i]),
-        pm:  Math.round(pms[i]  ?? 0),
-        no2: Math.round(no2s[i] ?? 0),
-        historical: true
+        aqi: avg(aqis), pm: avg(pms), no2: avg(no2s),
+        historical: true,
+        sensors: sensorSnap
       });
     });
 
-    // Merge: keep existing live readings, prepend historical ones
     const liveReadings = historyData.filter(d => !d.historical);
     historyData = [...imported, ...liveReadings];
     try { localStorage.setItem('delhi-aq-history', JSON.stringify(historyData)); } catch(e){}
@@ -479,6 +487,45 @@ async function fetchHistoricalData(startDate, endDate) {
     document.getElementById('hist-status').textContent = 'Historical fetch failed';
   }
   document.getElementById('hist-load-btn').disabled = false;
+}
+
+// ── APPLY A HISTORICAL SNAPSHOT TO THE MAP ────────────────────
+let isHistoricalView = false;
+
+function applySnapshot(entry) {
+  if (!entry?.sensors) return;
+  isHistoricalView = true;
+
+  // Update each sensor with snapshot values
+  entry.sensors.forEach(snap => {
+    const s = SENSORS.find(s => s.id === snap.id);
+    if (!s) return;
+    s.aqi = snap.aqi; s.pm = snap.pm; s.no2 = snap.no2;
+    s.cat = snap.aqi != null ? aqiCat(snap.aqi) : null;
+  });
+
+  buildSidebar();
+  updateMarkers();
+  runTriangulation();
+
+  // Show banner on map
+  let banner = document.getElementById('hist-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'hist-banner';
+    banner.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1000;background:#1a1d27;border:1px solid #4a7cf0;border-radius:6px;padding:6px 14px;font-size:12px;color:#ddd;display:flex;align-items:center;gap:10px;white-space:nowrap';
+    document.querySelector('.map-wrap').appendChild(banner);
+  }
+  banner.innerHTML = `<span>📅 Viewing: ${new Date(entry.t).toLocaleString('en-GB',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+    <button onclick="exitHistoricalView()" style="font-size:10px;padding:2px 8px;border-radius:4px;border:0.5px solid #888;background:transparent;color:#aaa;cursor:pointer">← Live</button>`;
+}
+
+function exitHistoricalView() {
+  isHistoricalView = false;
+  const banner = document.getElementById('hist-banner');
+  if (banner) banner.remove();
+  // Restore live sensor values
+  fetchAQ();
 }
 
 function renderChart() {
@@ -494,16 +541,17 @@ function renderChart() {
     return;
   }
 
+  // Update map to show average for the selected date range
+  if (!isHistoricalView) updateMapForRange(filtered);
+
   const fmt = t => {
     const dt = new Date(t);
-    return dt.toLocaleDateString('en-GB', {day:'numeric',month:'short'}) + ' ' +
-           dt.getHours().toString().padStart(2,'0') + ':00';
+    return dt.toLocaleDateString('en-GB',{day:'numeric',month:'short'}) + ' ' +
+           dt.getHours().toString().padStart(2,'0')+':00';
   };
   const labels = filtered.map(d => fmt(d.t));
   const vals   = filtered.map(d => d[currentTab]);
   const col    = currentTab==='aqi'?'#ff7043':currentTab==='pm'?'#ffb300':'#4a7cf0';
-
-  // Color points: historical = muted, live = bright
   const ptColors = filtered.map(d => d.historical ? col+'88' : col);
 
   if (chart) { chart.destroy(); chart = null; }
@@ -512,18 +560,30 @@ function renderChart() {
     data:{
       labels,
       datasets:[{
-        data: vals, label: currentTab,
-        borderColor: col, backgroundColor: col+'18',
-        borderWidth: 1.5, pointRadius: 1.5,
-        pointBackgroundColor: ptColors,
-        fill: true, tension: 0.3
+        data:vals, label:currentTab,
+        borderColor:col, backgroundColor:col+'18',
+        borderWidth:1.5, pointRadius:2,
+        pointBackgroundColor:ptColors,
+        pointHoverRadius:5,
+        fill:true, tension:0.3
       }]
     },
     options:{
       responsive:true, maintainAspectRatio:false, animation:false,
+      onClick(e, elements) {
+        if (!elements.length) return;
+        const idx = elements[0].index;
+        const entry = filtered[idx];
+        if (entry) applySnapshot(entry);
+      },
       plugins:{
         legend:{display:false},
-        tooltip:{callbacks:{title: ctx => new Date(filtered[ctx[0].dataIndex].t).toLocaleString()}}
+        tooltip:{
+          callbacks:{
+            title: ctx => new Date(filtered[ctx[0].dataIndex].t).toLocaleString(),
+            afterLabel: () => '▶ Click to view map at this time'
+          }
+        }
       },
       scales:{
         x:{ticks:{color:'#666',font:{size:9},maxTicksLimit:16},grid:{color:'#1a1d27'}},
@@ -531,6 +591,24 @@ function renderChart() {
       }
     }
   });
+}
+
+function updateMapForRange(filtered) {
+  // Show the average sensor state across the selected range
+  if (!filtered.length || !filtered[0].sensors) return;
+  const n = filtered.length;
+  SENSORS.forEach(s => {
+    const aqis = filtered.map(d => d.sensors?.find(x=>x.id===s.id)?.aqi).filter(v=>v!=null);
+    const pms  = filtered.map(d => d.sensors?.find(x=>x.id===s.id)?.pm).filter(v=>v!=null);
+    const no2s = filtered.map(d => d.sensors?.find(x=>x.id===s.id)?.no2).filter(v=>v!=null);
+    if (!aqis.length) return;
+    const avg = arr => Math.round(arr.reduce((a,b)=>a+b,0)/arr.length);
+    s.aqi = avg(aqis); s.pm = avg(pms); s.no2 = avg(no2s);
+    s.cat = aqiCat(s.aqi);
+  });
+  buildSidebar();
+  updateMarkers();
+  runTriangulation();
 }
 
 function setTab(tab, el) {
