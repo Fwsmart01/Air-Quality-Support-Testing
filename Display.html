@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -444,36 +443,43 @@ async function fetchHistoricalData(startDate, endDate) {
   document.getElementById('hist-status').textContent = 'Loading historical data…';
   document.getElementById('hist-load-btn').disabled = true;
   try {
-    // Fetch per-sensor historical data for accurate per-location readings
-    const results = await Promise.all(SENSORS.map(s =>
-      fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${s.lat}&longitude=${s.lng}&hourly=pm2_5,nitrogen_dioxide,us_aqi&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`)
-        .then(r => r.json())
-    ));
+    // Fetch AQ per sensor + wind together
+    const [windRes, ...aqResults] = await Promise.all([
+      fetch(`https://api.open-meteo.com/v1/forecast?latitude=28.63&longitude=77.22&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kmh&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`).then(r=>r.json()),
+      ...SENSORS.map(s =>
+        fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${s.lat}&longitude=${s.lng}&hourly=pm2_5,nitrogen_dioxide,us_aqi&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`).then(r=>r.json())
+      )
+    ]);
 
-    // Build per-timestamp city average entries (every 3 hours)
-    const times = results[0].hourly.time;
+    const times = aqResults[0].hourly.time;
     const imported = [];
+
     times.forEach((t, i) => {
       if (i % 3 !== 0) return;
-      const aqis = results.map(r => r.hourly.us_aqi?.[i]).filter(v => v != null);
-      const pms  = results.map(r => r.hourly.pm2_5?.[i]).filter(v => v != null);
-      const no2s = results.map(r => r.hourly.nitrogen_dioxide?.[i]).filter(v => v != null);
+      const aqis = aqResults.map(r => r.hourly.us_aqi?.[i]).filter(v => v != null);
       if (!aqis.length) return;
-      const avg = arr => Math.round(arr.reduce((a,b)=>a+b,0)/arr.length);
+      const pms  = aqResults.map(r => r.hourly.pm2_5?.[i]).filter(v => v != null);
+      const no2s = aqResults.map(r => r.hourly.nitrogen_dioxide?.[i]).filter(v => v != null);
+      const avg  = arr => Math.round(arr.reduce((a,b)=>a+b,0)/arr.length);
 
-      // Store per-sensor snapshot for map playback
-      const sensorSnap = results.map((r, si) => ({
-        id: SENSORS[si].id,
-        aqi: r.hourly.us_aqi?.[i] != null ? Math.round(r.hourly.us_aqi[i]) : null,
-        pm:  r.hourly.pm2_5?.[i]  != null ? Math.round(r.hourly.pm2_5[i])  : null,
-        no2: r.hourly.nitrogen_dioxide?.[i] != null ? Math.round(r.hourly.nitrogen_dioxide[i]) : null,
+      const sensorSnap = aqResults.map((r, si) => ({
+        id:  SENSORS[si].id,
+        aqi: r.hourly.us_aqi?.[i]             != null ? Math.round(r.hourly.us_aqi[i])             : null,
+        pm:  r.hourly.pm2_5?.[i]              != null ? Math.round(r.hourly.pm2_5[i])              : null,
+        no2: r.hourly.nitrogen_dioxide?.[i]   != null ? Math.round(r.hourly.nitrogen_dioxide[i])   : null,
       }));
+
+      // Wind at this timestamp
+      const wDeg  = windRes.hourly?.wind_direction_10m?.[i] ?? null;
+      const wSpd  = windRes.hourly?.wind_speed_10m?.[i]     ?? null;
+      const wGust = windRes.hourly?.wind_gusts_10m?.[i]     ?? null;
 
       imported.push({
         t: new Date(t).toISOString(),
         aqi: avg(aqis), pm: avg(pms), no2: avg(no2s),
         historical: true,
-        sensors: sensorSnap
+        sensors: sensorSnap,
+        wind: { deg: wDeg, spd: wSpd, gust: wGust }
       });
     });
 
@@ -524,8 +530,8 @@ function exitHistoricalView() {
   isHistoricalView = false;
   const banner = document.getElementById('hist-banner');
   if (banner) banner.remove();
-  // Restore live sensor values
-  fetchAQ();
+  // Restore live data
+  fetchWind().then(() => { drawWindArrows(); fetchAQ(); });
 }
 
 function renderChart() {
