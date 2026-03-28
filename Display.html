@@ -678,8 +678,12 @@ updateMarkers();
 
 // Fetch wind first, then AQ — triangulation needs both
 fetchWind().then(() => fetchAQ());
-setInterval(() => fetchWind().then(() => { drawWindArrows(); runTriangulation(); }), 30 * 60 * 1000); // wind every 30 min (model updates 4x/day)
-setInterval(fetchAQ, 5 * 60 * 1000); // AQ every 5 min
+setInterval(() => {
+  if (!isHistoricalView) fetchWind().then(() => { drawWindArrows(); runTriangulation(); });
+}, 30 * 60 * 1000);
+setInterval(() => {
+  if (!isHistoricalView) fetchAQ();
+}, 5 * 60 * 1000);
 </script>
 </body>
 </html>
