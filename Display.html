@@ -446,7 +446,8 @@ async function fetchHistoricalData(startDate, endDate) {
     // Single central Delhi point for history — avoids 429 rate limit from 8 parallel calls
     // Wind and AQ fetched sequentially with a small delay between
     const aqUrl   = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=28.63&longitude=77.22&hourly=pm2_5,nitrogen_dioxide,us_aqi&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`;
-    const windUrl = `https://api.open-meteo.com/v1/forecast?latitude=28.63&longitude=77.22&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kmh&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`;
+    // Use archive endpoint for historical wind (forecast endpoint only returns current/future)
+    const windUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=28.63&longitude=77.22&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kmh&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`;
 
     const aqRes = await fetch(aqUrl);
     if (!aqRes.ok) throw new Error('AQ HTTP ' + aqRes.status);
