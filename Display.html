@@ -83,12 +83,19 @@ header span{font-size:12px;color:#888}
   <div class="main">
     <div class="map-wrap"><div id="lmap"></div></div>
     <div class="history-panel">
-      <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
         <div class="panel-title" style="margin:0">Historical data</div>
         <div class="tabs">
           <button class="tab active" onclick="setTab('aqi',this)">AQI</button>
           <button class="tab" onclick="setTab('pm',this)">PM2.5</button>
           <button class="tab" onclick="setTab('no2',this)">NO₂</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <input type="date" id="date-from" style="background:#1a1d27;border:0.5px solid #2a2d3a;border-radius:4px;color:#ddd;font-size:11px;padding:3px 6px" onchange="renderChart()">
+          <span style="font-size:11px;color:#555">→</span>
+          <input type="date" id="date-to"   style="background:#1a1d27;border:0.5px solid #2a2d3a;border-radius:4px;color:#ddd;font-size:11px;padding:3px 6px" onchange="renderChart()">
+          <button id="hist-load-btn" onclick="loadHistoricalRange()" style="font-size:11px;padding:3px 10px;border-radius:4px;border:0.5px solid #4a7cf0;background:transparent;color:#4a7cf0;cursor:pointer">Load range</button>
+          <button onclick="clearHistory()" style="font-size:11px;padding:3px 10px;border-radius:4px;border:0.5px solid #2a2d3a;background:transparent;color:#666;cursor:pointer">Clear</button>
         </div>
         <div class="history-status" id="hist-status">—</div>
       </div>
@@ -416,7 +423,7 @@ function runTriangulation() {
   }
 }
 
-// ── HISTORY (localStorage) ───────────────────────────────────
+// ── HISTORY ───────────────────────────────────────────────────
 function loadHistory() {
   try { historyData = JSON.parse(localStorage.getItem('delhi-aq-history') || '[]'); }
   catch(e) { historyData = []; }
@@ -426,26 +433,106 @@ function saveReading() {
   if (!live.length) return;
   const avg = f => Math.round(live.reduce((a,s)=>a+(s[f]||0),0)/live.length);
   historyData.push({t: new Date().toISOString(), aqi: avg('aqi'), pm: avg('pm'), no2: avg('no2')});
-  if (historyData.length > 48) historyData = historyData.slice(-48);
+  if (historyData.length > 2000) historyData = historyData.slice(-2000);
   try { localStorage.setItem('delhi-aq-history', JSON.stringify(historyData)); } catch(e){}
   document.getElementById('hist-status').textContent = historyData.length + ' readings stored';
   renderChart();
 }
+
+// ── HISTORICAL BACKFILL (Open-Meteo Historical AQ API) ────────
+async function fetchHistoricalData(startDate, endDate) {
+  document.getElementById('hist-status').textContent = 'Loading historical data…';
+  document.getElementById('hist-load-btn').disabled = true;
+  try {
+    // Use centre of Delhi — single point for city-wide average
+    const url = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=28.63&longitude=77.22&hourly=pm2_5,nitrogen_dioxide,us_aqi&start_date=${startDate}&end_date=${endDate}&timezone=Asia/Kolkata`;
+    const res  = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const times = data.hourly.time;
+    const aqis  = data.hourly.us_aqi;
+    const pms   = data.hourly.pm2_5;
+    const no2s  = data.hourly.nitrogen_dioxide;
+
+    // Build entries — skip nulls, sample every 3 hours to keep size manageable
+    const imported = [];
+    times.forEach((t, i) => {
+      if (i % 3 !== 0) return;
+      if (aqis[i] == null) return;
+      imported.push({
+        t: new Date(t).toISOString(),
+        aqi: Math.round(aqis[i]),
+        pm:  Math.round(pms[i]  ?? 0),
+        no2: Math.round(no2s[i] ?? 0),
+        historical: true
+      });
+    });
+
+    // Merge: keep existing live readings, prepend historical ones
+    const liveReadings = historyData.filter(d => !d.historical);
+    historyData = [...imported, ...liveReadings];
+    try { localStorage.setItem('delhi-aq-history', JSON.stringify(historyData)); } catch(e){}
+    document.getElementById('hist-status').textContent = `${imported.length} historical + ${liveReadings.length} live readings`;
+    renderChart();
+  } catch(e) {
+    console.error('Historical fetch failed:', e);
+    document.getElementById('hist-status').textContent = 'Historical fetch failed';
+  }
+  document.getElementById('hist-load-btn').disabled = false;
+}
+
 function renderChart() {
-  if (!historyData.length) { document.getElementById('hist-status').textContent = 'No readings yet'; return; }
-  const labels = historyData.map(d => { const dt=new Date(d.t); return dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0'); });
-  const vals   = historyData.map(d => d[currentTab]);
+  const startVal = document.getElementById('date-from')?.value;
+  const endVal   = document.getElementById('date-to')?.value;
+  let filtered = historyData;
+  if (startVal) filtered = filtered.filter(d => d.t >= new Date(startVal).toISOString());
+  if (endVal)   filtered = filtered.filter(d => d.t <= new Date(endVal + 'T23:59:59').toISOString());
+
+  if (!filtered.length) {
+    document.getElementById('hist-status').textContent = 'No data in selected range';
+    if (chart) { chart.destroy(); chart = null; }
+    return;
+  }
+
+  const fmt = t => {
+    const dt = new Date(t);
+    return dt.toLocaleDateString('en-GB', {day:'numeric',month:'short'}) + ' ' +
+           dt.getHours().toString().padStart(2,'0') + ':00';
+  };
+  const labels = filtered.map(d => fmt(d.t));
+  const vals   = filtered.map(d => d[currentTab]);
   const col    = currentTab==='aqi'?'#ff7043':currentTab==='pm'?'#ffb300':'#4a7cf0';
+
+  // Color points: historical = muted, live = bright
+  const ptColors = filtered.map(d => d.historical ? col+'88' : col);
+
   if (chart) { chart.destroy(); chart = null; }
   chart = new Chart(document.getElementById('history-chart'), {
     type:'line',
-    data:{labels, datasets:[{data:vals, label:currentTab, borderColor:col, backgroundColor:col+'22', borderWidth:1.5, pointRadius:2, fill:true, tension:0.3}]},
-    options:{responsive:true, maintainAspectRatio:false, animation:false,
-      plugins:{legend:{display:false}},
-      scales:{x:{ticks:{color:'#666',font:{size:9},maxTicksLimit:12},grid:{color:'#1a1d27'}},
-              y:{ticks:{color:'#666',font:{size:9}},grid:{color:'#1e2130'}}}}
+    data:{
+      labels,
+      datasets:[{
+        data: vals, label: currentTab,
+        borderColor: col, backgroundColor: col+'18',
+        borderWidth: 1.5, pointRadius: 1.5,
+        pointBackgroundColor: ptColors,
+        fill: true, tension: 0.3
+      }]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{title: ctx => new Date(filtered[ctx[0].dataIndex].t).toLocaleString()}}
+      },
+      scales:{
+        x:{ticks:{color:'#666',font:{size:9},maxTicksLimit:16},grid:{color:'#1a1d27'}},
+        y:{ticks:{color:'#666',font:{size:9}},grid:{color:'#1e2130'}}
+      }
+    }
   });
 }
+
 function setTab(tab, el) {
   currentTab = tab;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -453,18 +540,42 @@ function setTab(tab, el) {
   renderChart();
 }
 
+function loadHistoricalRange() {
+  const from = document.getElementById('date-from').value;
+  const to   = document.getElementById('date-to').value;
+  if (!from || !to) { alert('Please select both a start and end date.'); return; }
+  if (from > to)    { alert('Start date must be before end date.'); return; }
+  fetchHistoricalData(from, to);
+}
+
+function clearHistory() {
+  if (!confirm('Clear all stored readings?')) return;
+  historyData = [];
+  localStorage.removeItem('delhi-aq-history');
+  document.getElementById('hist-status').textContent = 'Cleared';
+  if (chart) { chart.destroy(); chart = null; }
+}
+
 // ── INIT ─────────────────────────────────────────────────────
 tick();
 setInterval(tick, 30000);
 loadHistory();
+
+// Default date range: last 3 months
+const today    = new Date();
+const threeAgo = new Date(); threeAgo.setMonth(today.getMonth() - 3);
+const fmt = d => d.toISOString().split('T')[0];
+document.getElementById('date-from').value = fmt(threeAgo);
+document.getElementById('date-to').value   = fmt(today);
+
 renderChart();
 buildSidebar();
 updateMarkers();
 
 // Fetch wind first, then AQ — triangulation needs both
 fetchWind().then(() => fetchAQ());
-setInterval(() => fetchWind().then(() => { drawWindArrows(); runTriangulation(); }), 60 * 1000);
-setInterval(fetchAQ, 60 * 1000);
+setInterval(() => fetchWind().then(() => { drawWindArrows(); runTriangulation(); }), 30 * 60 * 1000); // wind every 30 min (model updates 4x/day)
+setInterval(fetchAQ, 5 * 60 * 1000); // AQ every 5 min
 </script>
 </body>
 </html>
