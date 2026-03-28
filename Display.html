@@ -224,50 +224,35 @@ function drawWindArrows() {
   }
 }
 
-// ── AIR QUALITY ──────────────────────────────────────────────
+// ── AIR QUALITY (Open-Meteo — no API key, no CORS) ───────────
 async function fetchAQ() {
-  document.getElementById('aq-src').textContent = 'Fetching OpenAQ…';
+  document.getElementById('aq-src').textContent = 'Fetching air quality…';
   try {
-    const res = await fetch('https://api.openaq.org/v3/locations?country_id=IN&limit=100&order_by=lastUpdated&sort=desc&bbox=76.8,28.4,77.4,28.9&api_key=a2d130a2f7cbd5610b09d24b782e30b760b372743239d47c864109ad1f035e04', {
-      headers:{'Accept':'application/json'}
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    if (!data.results?.length) throw new Error('No results');
+    // Build one request per sensor location
+    const results = await Promise.all(SENSORS.map(s =>
+      fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${s.lat}&longitude=${s.lng}&current=pm2_5,nitrogen_dioxide,us_aqi&timezone=Asia/Kolkata`)
+        .then(r => r.json())
+    ));
 
     let matched = 0;
-    data.results.forEach(station => {
-      if (!station.coordinates) return;
-      // Find closest sensor within 8km
-      let best = null, bestDist = 0.08;
-      SENSORS.forEach(s => {
-        const dist = Math.hypot(s.lat - station.coordinates.latitude, s.lng - station.coordinates.longitude);
-        if (dist < bestDist) { bestDist = dist; best = s; }
-      });
-      if (!best) return;
-
-      station.sensors?.forEach(sens => {
-        const p = sens.parameter?.name?.toLowerCase();
-        const v = sens.latest?.value;
-        if (v == null || v < 0) return;
-        if (p === 'pm25') {
-          best.pm  = Math.round(v);
-          best.aqi = pmToAqi(v);
-          best.cat = aqiCat(best.aqi);
-          matched++;
-        }
-        if (p === 'no2') best.no2 = Math.round(v);
-      });
+    results.forEach((data, i) => {
+      const s = SENSORS[i];
+      const c = data.current;
+      if (!c) return;
+      if (c.pm2_5   != null) { s.pm  = Math.round(c.pm2_5); }
+      if (c.nitrogen_dioxide != null) { s.no2 = Math.round(c.nitrogen_dioxide); }
+      if (c.us_aqi  != null) { s.aqi = c.us_aqi; s.cat = aqiCat(s.aqi); }
+      matched++;
     });
 
     buildSidebar();
     updateMarkers();
     runTriangulation();
-    document.getElementById('aq-src').textContent = `OpenAQ · ${matched} sensors matched · ${new Date().toLocaleTimeString()}`;
+    document.getElementById('aq-src').textContent = `Open-Meteo AQ · ${matched} sensors · ${new Date().toLocaleTimeString()}`;
     saveReading();
   } catch(e) {
     console.error('AQ fetch failed:', e);
-    document.getElementById('aq-src').textContent = 'OpenAQ unavailable — retrying in 10 min';
+    document.getElementById('aq-src').textContent = 'AQ fetch failed — retrying in 10 min';
   }
 }
 
