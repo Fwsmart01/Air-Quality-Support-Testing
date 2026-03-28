@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -462,8 +463,8 @@ updateMarkers();
 
 // Fetch wind first, then AQ — triangulation needs both
 fetchWind().then(() => fetchAQ());
-setInterval(() => fetchWind().then(() => { drawWindArrows(); runTriangulation(); }), 10 * 60 * 1000);
-setInterval(fetchAQ, 10 * 60 * 1000);
+setInterval(() => fetchWind().then(() => { drawWindArrows(); runTriangulation(); }), 60 * 1000);
+setInterval(fetchAQ, 60 * 1000);
 </script>
 </body>
 </html>
