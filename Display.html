@@ -228,8 +228,8 @@ function drawWindArrows() {
 async function fetchAQ() {
   document.getElementById('aq-src').textContent = 'Fetching OpenAQ…';
   try {
-    const res = await fetch('https://api.openaq.org/v3/locations?country_id=IN&limit=100&order_by=lastUpdated&sort=desc&bbox=76.8,28.4,77.4,28.9', {
-      headers:{'Accept':'application/json', 'X-API-Key': 'a2d130a2f7cbd5610b09d24b782e30b760b372743239d47c864109ad1f035e04'}
+    const res = await fetch('https://api.openaq.org/v3/locations?country_id=IN&limit=100&order_by=lastUpdated&sort=desc&bbox=76.8,28.4,77.4,28.9&api_key=a2d130a2f7cbd5610b09d24b782e30b760b372743239d47c864109ad1f035e04', {
+      headers:{'Accept':'application/json'}
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
